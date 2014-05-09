@@ -31,6 +31,7 @@ from mercurial import help
 from mercurial import hg
 from mercurial import ignore
 from mercurial import localrepo
+from mercurial.node import hex
 from mercurial import revset
 from mercurial import templatekw
 from mercurial import util as hgutil
@@ -190,7 +191,8 @@ def revset_fromgit(repo, subset, x):
     '''
     args = revset.getargs(x, 0, 0, "fromgit takes no arguments")
     git = repo.githandler
-    return [r for r in subset if git.map_git_get(repo[r].hex()) is not None]
+    node = repo.changelog.node
+    return [r for r in subset if git.map_git_get(hex(node(r))) is not None]
 
 def revset_gitnode(repo, subset, x):
     '''``gitnode(hash)``
@@ -200,8 +202,9 @@ def revset_gitnode(repo, subset, x):
     rev = revset.getstring(args[0],
                            "the argument to gitnode() must be a hash")
     git = repo.githandler
+    node = repo.changelog.node
     def matches(r):
-        gitnode = git.map_git_get(repo[r].hex())
+        gitnode = git.map_git_get(hex(node(r)))
         if gitnode is None:
             return False
         return rev in [gitnode, gitnode[:12]]
