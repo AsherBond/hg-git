@@ -22,6 +22,7 @@ import inspect
 import os
 
 from mercurial import bundlerepo
+from mercurial import cmdutil
 from mercurial import commands
 from mercurial import demandimport
 from mercurial import dirstate
@@ -33,6 +34,7 @@ from mercurial import ignore
 from mercurial import localrepo
 from mercurial.node import hex
 from mercurial import revset
+from mercurial import scmutil
 from mercurial import templatekw
 from mercurial import util as hgutil
 from mercurial import url
@@ -48,6 +50,9 @@ import verify
 
 testedwith = '2.8.2 3.0'
 buglink = 'https://bitbucket.org/durin42/hg-git/issues'
+
+cmdtable = {}
+command = cmdutil.command(cmdtable)
 
 # support for `hg clone git://github.com/defunkt/facebox.git`
 # also hg clone git+ssh://git@github.com/schacon/simplegit.git
@@ -116,18 +121,36 @@ def reposetup(ui, repo):
         klass = hgrepo.generate_repo_subclass(repo.__class__)
         repo.__class__ = klass
 
+@command('gimport')
 def gimport(ui, repo, remote_name=None):
+    '''import commits from Git to Mercurial'''
     repo.githandler.import_commits(remote_name)
 
+@command('gexport')
 def gexport(ui, repo):
+    '''export commits from Mercurial to Git'''
     repo.githandler.export_commits()
 
+@command('gclear')
 def gclear(ui, repo):
+    '''clear out the Git cached data'''
     repo.ui.status(_("clearing out the git cache data\n"))
     repo.githandler.clear()
 
-from mercurial import dirstate
-from mercurial import ignore
+@command('gverify',
+         [('r', 'rev', '', _('revision to verify'), _('REV'))],
+         _('[-r REV]'))
+def gverify(ui, repo, **opts):
+    '''verify that a Mercurial rev matches the corresponding Git rev
+
+    Given a Mercurial revision that has a corresponding Git revision in the map,
+    this attempts to answer whether that revision has the same contents as the
+    corresponding Git revision.
+
+    '''
+    ctx = scmutil.revsingle(repo, opts.get('rev'), '.')
+    return verify.verify(ui, repo, ctx)
+
 if (getattr(dirstate, 'rootcache', False) and
     getattr(ignore, 'readpats', False)):
     # only install our dirstate wrapper if it has a hope of working
@@ -135,7 +158,9 @@ if (getattr(dirstate, 'rootcache', False) and
     extensions.wrapfunction(ignore, 'ignore', gitdirstate.gignore)
     dirstate.dirstate = gitdirstate.gitdirstate
 
+@command('git-cleanup')
 def git_cleanup(ui, repo):
+    '''clean up Git commit map after history editing'''
     new_map = []
     for line in repo.opener(GitHandler.mapfile):
         gitsha, hgsha = line.strip().split(' ', 1)
@@ -219,15 +244,3 @@ def gitnodekw(**args):
         gitnode = ''
     return gitnode
 
-cmdtable = {
-  "gimport":
-        (gimport, [], _('hg gimport')),
-  "gexport":
-        (gexport, [], _('hg gexport')),
-  "gclear":
-      (gclear, [], _('Clears out the Git cached data')),
-  "git-cleanup": (git_cleanup, [], _(
-        "Cleans up git repository after history editing")),
-  "gverify": (verify.verify,
-    [('r', 'rev', '', _('revision to verify'), _('REV'))], _('[-r REV]')),
-}
