@@ -23,6 +23,7 @@ from mercurial.i18n import _
 from mercurial.node import hex, bin, nullid
 from mercurial import context, util as hgutil
 from mercurial import error
+from mercurial import url
 
 import _ssh
 import hg2git
@@ -817,7 +818,16 @@ class GitHandler(object):
                 e = fc.flags()
                 copied_path = fc.renamed()
 
-            return context.memfilectx(f, data, 'l' in e, 'x' in e, copied_path)
+            try:
+                return context.memfilectx(self.repo, f, data,
+                                          islink='l' in e,
+                                          isexec='x' in e,
+                                          copied=copied_path)
+            except TypeError:
+                return context.memfilectx(f, data,
+                                          islink='l' in e,
+                                          isexec='x' in e,
+                                          copied=copied_path)
 
         p1, p2 = (nullid, nullid)
         octopus = False
@@ -828,6 +838,8 @@ class GitHandler(object):
                 ctx = context.memctx(self.repo, (p1, p2), text,
                                      list(files) + findconvergedfiles(p1, p2),
                                      getfilectx, author, date, {'hg-git': 'octopus'})
+                # See comment below about setting substate to None.
+                ctx.substate = None
                 return hex(self.repo.commitctx(ctx))
 
             octopus = len(gparents) > 2
@@ -869,7 +881,14 @@ class GitHandler(object):
         ctx = context.memctx(self.repo, (p1, p2), text,
                              list(files) + findconvergedfiles(p1, p2),
                              getfilectx, author, date, extra)
-
+        # Starting Mercurial commit d2743be1bb06, memctx imports from
+        # committablectx. This means that it has a 'substate' property that
+        # contains the subrepo state. Ordinarily, Mercurial expects the subrepo
+        # to be present while making a new commit -- since hg-git is importing
+        # purely in-memory commits without backing stores for the subrepos, that
+        # won't work. Forcibly set the substate to None so that there's no
+        # attempt to read subrepos.
+        ctx.substate = None
         node = self.repo.commitctx(ctx)
 
         self.swap_out_encoding(oldenc)
@@ -1400,7 +1419,7 @@ class GitHandler(object):
             if not httpclient:
                 raise RepoError('git via HTTP requires dulwich 0.8.1 or later')
             else:
-                auth_handler = urllib2.HTTPBasicAuthHandler(AuthManager(self.ui))
+                auth_handler = urllib2.HTTPBasicAuthHandler(url.passwordmgr(self.ui))
                 opener = urllib2.build_opener(auth_handler)
                 try:
                     return client.HttpGitClient(uri, opener=opener, thin_packs=False), uri
@@ -1414,31 +1433,3 @@ class GitHandler(object):
 
         # if its not git or git+ssh, try a local url..
         return client.SubprocessGitClient(thin_packs=False), uri
-
-class AuthManager(object):
-    def __init__(self, ui):
-        self.ui = ui
-
-    def add_password(self, realm, uri, user, passwd):
-        raise NotImplementedError(
-            'AuthManager currently gets passwords from hg repo config')
-
-    def find_user_password(self, realm, authuri):
-
-        # find a stanza in the auth section which matches this uri
-        for item in self.ui.configitems('auth'):
-            if len(item) < 2:
-                continue
-            if item[0].endswith('.prefix') and authuri.startswith(item[1]):
-                prefix = item[0][:-len('.prefix')]
-                break
-        else:
-            # no matching stanza found!
-            return (None,None)
-
-        self.ui.note(_('using "%s" auth credentials\n') % (prefix,))
-        username = self.ui.config('auth', '%s.username' % prefix)
-        password = self.ui.config('auth', '%s.password' % prefix)
-
-        return (username,password)
-
